@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   submitVote,
   getUserVote,
@@ -11,14 +11,19 @@ import {
   type Comment,
 } from "@/lib/firestore";
 import { useAuth } from "@/components/AuthProvider";
-import { Send, MessageCircle, User } from "lucide-react";
+import { Send, MessageCircle, ChevronRight, ChevronLeft } from "lucide-react";
 
 interface PollCardProps {
   poll: Poll;
+  onNext: () => void;
+  onPrev: () => void;
+  hasNext: boolean;
+  hasPrev: boolean;
 }
 
-export default function PollCard({ poll }: PollCardProps) {
+export default function PollCard({ poll, onNext, onPrev, hasNext, hasPrev }: PollCardProps) {
   const { user } = useAuth();
+  const [flipped, setFlipped] = useState(false);
   const [hasVoted, setHasVoted] = useState(false);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [voteCounts, setVoteCounts] = useState<Map<number, number>>(new Map());
@@ -28,6 +33,16 @@ export default function PollCard({ poll }: PollCardProps) {
   const [isSubmittingVote, setIsSubmittingVote] = useState(false);
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   const [loadingComments, setLoadingComments] = useState(false);
+  const commentsRef = useRef<HTMLDivElement>(null);
+
+  // Reset state when poll changes
+  useEffect(() => {
+    setFlipped(false);
+    setHasVoted(false);
+    setSelectedOption(null);
+    setComments([]);
+    setNewComment("");
+  }, [poll.id]);
 
   // Check if user already voted
   useEffect(() => {
@@ -36,6 +51,7 @@ export default function PollCard({ poll }: PollCardProps) {
       if (vote) {
         setHasVoted(true);
         setSelectedOption(vote.optionIndex);
+        setFlipped(true);
       }
     });
   }, [user, poll]);
@@ -50,15 +66,15 @@ export default function PollCard({ poll }: PollCardProps) {
     return () => unsub();
   }, [poll]);
 
-  // Load comments (always visible)
+  // Load comments when flipped
   useEffect(() => {
-    if (!poll) return;
+    if (!flipped || !poll) return;
     setLoadingComments(true);
     getComments(poll.id)
       .then(setComments)
       .catch(console.error)
       .finally(() => setLoadingComments(false));
-  }, [poll]);
+  }, [flipped, poll]);
 
   const handleVote = async (optionIndex: number) => {
     if (!user || hasVoted || isSubmittingVote) return;
@@ -67,6 +83,7 @@ export default function PollCard({ poll }: PollCardProps) {
       await submitVote(poll.id, user.uid, optionIndex);
       setSelectedOption(optionIndex);
       setHasVoted(true);
+      setFlipped(true);
     } catch (err) {
       console.error("Vote failed:", err);
     } finally {
@@ -88,6 +105,9 @@ export default function PollCard({ poll }: PollCardProps) {
       setNewComment("");
       const updated = await getComments(poll.id);
       setComments(updated);
+      setTimeout(() => {
+        commentsRef.current?.scrollTo({ top: commentsRef.current.scrollHeight, behavior: "smooth" });
+      }, 50);
     } catch (err) {
       console.error("Comment failed:", err);
     } finally {
@@ -111,170 +131,213 @@ export default function PollCard({ poll }: PollCardProps) {
       : -1;
 
   return (
-    <div className="w-full max-w-2xl mx-auto space-y-6">
-      {/* Poll Card */}
+    <div className="relative w-full max-w-4xl mx-auto" style={{ perspective: "1500px" }}>
+      {/* Carousel Side Arrows */}
+      {hasPrev && (
+        <button
+          onClick={onPrev}
+          className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-14 z-20 w-10 h-10 rounded-full bg-white/[0.04] border border-white/10 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/[0.08] transition-all duration-300 hidden md:flex"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+      )}
+      {hasNext && (
+        <button
+          onClick={onNext}
+          className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-14 z-20 w-10 h-10 rounded-full bg-white/[0.04] border border-white/10 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/[0.08] transition-all duration-300 hidden md:flex"
+        >
+          <ChevronRight className="w-5 h-5" />
+        </button>
+      )}
+
+      {/* 3D Flip Card */}
       <div
-        className={`relative rounded-2xl overflow-hidden transition-all duration-500 ${
-          hasVoted ? "shadow-[0_0_40px_rgba(0,255,255,0.08)]" : "shadow-[0_0_40px_rgba(0,255,255,0.04)]"
-        }`}
+        className="relative w-full"
+        style={{
+          transformStyle: "preserve-3d",
+          transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)",
+          transition: "transform 0.7s cubic-bezier(0.34, 1.56, 0.64, 1)",
+        }}
       >
-        {/* Animated gradient border */}
-        <div className="absolute inset-0 rounded-2xl p-[1.5px] bg-gradient-to-br from-neon-cyan/40 via-neon-magenta/30 to-neon-lime/20 pointer-events-none" />
+        {/* FRONT FACE */}
+        <div
+          className="relative w-full rounded-2xl overflow-hidden"
+          style={{
+            backfaceVisibility: "hidden",
+            WebkitBackfaceVisibility: "hidden",
+          }}
+        >
+          {/* Gradient border */}
+          <div className="absolute inset-0 rounded-2xl p-[1px] bg-gradient-to-br from-neon-cyan/30 via-white/10 to-neon-magenta/20 pointer-events-none" />
 
-        <div className="relative bg-[#0f0f0f] rounded-2xl">
-          {/* Top bar with category and vote count */}
-          <div className="flex items-center justify-between px-6 pt-6 pb-2">
-            <span className="px-3 py-1 text-xs font-semibold tracking-wider uppercase rounded-full bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20">
-              {poll.category}
-            </span>
-            <span className="text-sm text-gray-500 font-medium">
-              {totalVotes.toLocaleString()} vote{totalVotes !== 1 ? "s" : ""}
-            </span>
-          </div>
+          <div className="relative bg-[#0c0c0c] rounded-2xl p-8 md:p-12 lg:p-14">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-6">
+              <span className="px-3 py-1 text-[10px] font-bold tracking-[0.15em] uppercase rounded-full bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/15">
+                {poll.category}
+              </span>
+              <span className="text-sm text-gray-600 font-medium">
+                {totalVotes.toLocaleString()} vote{totalVotes !== 1 ? "s" : ""}
+              </span>
+            </div>
 
-          {/* Question */}
-          <div className="px-6 py-5">
-            <h2 className="text-2xl md:text-3xl font-bold text-white leading-snug">
+            {/* Question */}
+            <h2 className="text-2xl md:text-3xl lg:text-4xl font-bold text-white leading-tight mb-10">
               {poll.question}
             </h2>
+
+            {/* Options */}
+            <div className="space-y-3">
+              {poll.options.map((option, index) => (
+                <button
+                  key={index}
+                  onClick={() => handleVote(index)}
+                  disabled={isSubmittingVote}
+                  className="group w-full flex items-center gap-4 px-6 py-5 rounded-2xl border border-white/10 bg-white/[0.02] text-gray-200 text-left font-medium text-lg transition-all duration-300 hover:border-neon-cyan/30 hover:bg-neon-cyan/[0.03] hover:shadow-[0_0_30px_rgba(0,255,255,0.04)] active:scale-[0.98]"
+                >
+                  <span className="flex-shrink-0 w-11 h-11 rounded-xl bg-white/5 text-gray-400 font-bold text-sm flex items-center justify-center transition-colors group-hover:bg-neon-cyan/10 group-hover:text-neon-cyan">
+                    {String.fromCharCode(65 + index)}
+                  </span>
+                  <span>{option}</span>
+                </button>
+              ))}
+            </div>
           </div>
+        </div>
 
-          {/* Options OR Results */}
-          <div className="px-6 pb-6 space-y-3">
-            {poll.options.map((option, index) => {
-              const pct = getPercentage(index);
-              const isSelected = selectedOption === index;
-              const isWinner = winningIndex === index && totalVotes > 0;
+        {/* BACK FACE */}
+        <div
+          className="absolute inset-0 w-full rounded-2xl overflow-hidden"
+          style={{
+            backfaceVisibility: "hidden",
+            WebkitBackfaceVisibility: "hidden",
+            transform: "rotateY(180deg)",
+          }}
+        >
+          {/* Gradient border */}
+          <div className="absolute inset-0 rounded-2xl p-[1px] bg-gradient-to-br from-neon-lime/20 via-white/10 to-neon-cyan/20 pointer-events-none" />
 
-              return (
-                <div key={index} className="relative">
-                  {/* Progress bar background (shown after voting) */}
-                  {hasVoted && (
-                    <div
-                      className="absolute inset-0 rounded-xl overflow-hidden"
-                      style={{ zIndex: 0 }}
-                    >
-                      <div
-                        className={`h-full rounded-xl transition-all duration-700 ease-out ${
-                          isSelected
-                            ? "bg-gradient-to-r from-neon-cyan/15 to-neon-lime/10"
-                            : "bg-white/[0.03]"
-                        }`}
-                        style={{ width: `${Math.max(pct, 5)}%` }}
-                      />
-                    </div>
-                  )}
+          <div className="relative h-full bg-[#0c0c0c] rounded-2xl flex flex-col p-8 md:p-10">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4 flex-shrink-0">
+              <span className="px-3 py-1 text-[10px] font-bold tracking-[0.15em] uppercase rounded-full bg-neon-lime/10 text-neon-lime border border-neon-lime/15">
+                Results
+              </span>
+              <span className="text-sm text-gray-600 font-medium">
+                {totalVotes.toLocaleString()} vote{totalVotes !== 1 ? "s" : ""}
+              </span>
+            </div>
 
-                  <button
-                    onClick={() => handleVote(index)}
-                    disabled={hasVoted || isSubmittingVote}
-                    className={`relative w-full flex items-center gap-4 px-5 py-4 rounded-xl border-2 text-left font-medium transition-all duration-300 ${
-                      hasVoted
-                        ? isSelected
-                          ? "border-neon-cyan/40 text-white cursor-default"
-                          : "border-white/5 text-gray-400 cursor-default"
-                        : "border-white/10 text-gray-200 hover:border-neon-cyan/40 hover:bg-neon-cyan/5 hover:text-white cursor-pointer hover:shadow-[0_0_20px_rgba(0,255,255,0.06)]"
-                    }`}
-                    style={{ zIndex: 1 }}
-                  >
-                    {/* Option letter */}
-                    <span
-                      className={`flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold transition-colors ${
-                        hasVoted
-                          ? isSelected
-                            ? "bg-neon-cyan text-black"
-                            : "bg-white/5 text-gray-500"
-                          : "bg-white/5 text-gray-400 group-hover:bg-neon-cyan/20"
-                      }`}
-                    >
-                      {String.fromCharCode(65 + index)}
-                    </span>
+            {/* Question */}
+            <h3 className="text-lg font-semibold text-white/80 leading-snug mb-5 flex-shrink-0">
+              {poll.question}
+            </h3>
 
-                    {/* Option text */}
-                    <span className="flex-1 text-base md:text-lg">{option}</span>
+            {/* Results Bars */}
+            <div className="space-y-3 mb-5 flex-shrink-0">
+              {poll.options.map((option, index) => {
+                const pct = getPercentage(index);
+                const isSelected = selectedOption === index;
+                const isWinner = winningIndex === index && totalVotes > 0;
 
-                    {/* Percentage (shown after voting) */}
-                    {hasVoted && (
+                return (
+                  <div key={index}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-sm font-medium ${isSelected ? "text-neon-cyan" : "text-gray-300"}`}>
+                        {option}
+                      </span>
                       <div className="flex items-center gap-2">
                         {isWinner && (
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-neon-lime">
+                          <span className="text-[9px] font-bold uppercase tracking-wider text-neon-lime">
                             Leading
                           </span>
                         )}
-                        <span
-                          className={`text-lg font-bold ${
-                            isSelected ? "text-neon-cyan" : "text-gray-500"
-                          }`}
-                        >
+                        <span className={`text-sm font-bold ${isSelected ? "text-neon-cyan" : "text-gray-500"}`}>
                           {pct}%
                         </span>
                       </div>
-                    )}
-                  </button>
-
-                  {/* Vote count text below bar */}
-                  {hasVoted && (
-                    <p className="text-xs text-gray-600 mt-1 ml-14">
-                      {voteCounts.get(index) || 0} vote
-                      {(voteCounts.get(index) || 0) !== 1 ? "s" : ""}
+                    </div>
+                    <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-1000 ease-out ${
+                          isSelected ? "bg-gradient-to-r from-neon-cyan to-neon-lime" : "bg-white/15"
+                        }`}
+                        style={{ width: `${Math.max(pct, 2)}%` }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-700 mt-0.5">
+                      {voteCounts.get(index) || 0} vote{(voteCounts.get(index) || 0) !== 1 ? "s" : ""}
                     </p>
-                  )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Divider */}
+            <div className="h-px bg-white/5 mb-4 flex-shrink-0" />
+
+            {/* Comments Header */}
+            <div className="flex items-center gap-2 mb-3 flex-shrink-0">
+              <MessageCircle className="w-4 h-4 text-neon-magenta" />
+              <span className="text-sm font-semibold text-white">Comments</span>
+              <span className="text-xs text-gray-600">({comments.length})</span>
+            </div>
+
+            {/* Comments List (scrollable) */}
+            <div
+              ref={commentsRef}
+              className="flex-1 overflow-y-auto space-y-2 min-h-[80px] mb-4 pr-1"
+              style={{ maxHeight: "200px" }}
+            >
+              {loadingComments ? (
+                <div className="flex justify-center py-4">
+                  <div className="w-5 h-5 border-2 border-neon-magenta border-t-transparent rounded-full animate-spin" />
                 </div>
-              );
-            })}
-
-            {/* Vote confirmation */}
-            {hasVoted && selectedOption !== null && (
-              <div className="mt-4 p-4 rounded-xl bg-neon-cyan/5 border border-neon-cyan/15">
-                <p className="text-sm text-neon-cyan font-medium">
-                  You voted: {poll.options[selectedOption]}
+              ) : comments.length === 0 ? (
+                <p className="text-xs text-gray-700 text-center py-4">
+                  No comments yet. Be the first to share your thoughts!
                 </p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+              ) : (
+                comments.map((comment) => (
+                  <div key={comment.id} className="flex gap-2.5 p-2.5 rounded-xl bg-white/[0.02]">
+                    {comment.userPhotoURL ? (
+                      <img src={comment.userPhotoURL} alt="" className="w-7 h-7 rounded-full flex-shrink-0" />
+                    ) : (
+                      <div className="w-7 h-7 rounded-full bg-neon-magenta/10 flex items-center justify-center flex-shrink-0">
+                        <span className="text-[10px] font-bold text-neon-magenta">
+                          {comment.userName.charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className="text-xs font-semibold text-gray-300">{comment.userName}</span>
+                        <span className="text-[9px] text-gray-700">
+                          {comment.createdAt?.toDate
+                            ? comment.createdAt.toDate().toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                            : ""}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400 leading-relaxed">{comment.text}</p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
 
-      {/* Comments Section — Always visible below */}
-      <div className="relative rounded-2xl overflow-hidden">
-        <div className="absolute inset-0 rounded-2xl p-[1px] bg-gradient-to-br from-white/10 via-white/5 to-transparent pointer-events-none" />
-        <div className="relative bg-[#0f0f0f] rounded-2xl p-6">
-          {/* Header */}
-          <div className="flex items-center gap-2 mb-5">
-            <MessageCircle className="w-5 h-5 text-neon-magenta" />
-            <h3 className="text-lg font-bold text-white">
-              Comments
-            </h3>
-            <span className="text-sm text-gray-500">
-              ({comments.length})
-            </span>
-          </div>
-
-          {/* Comment Form */}
-          <form onSubmit={handleAddComment} className="flex gap-3 mb-6">
-            {user?.photoURL ? (
-              <img
-                src={user.photoURL}
-                alt=""
-                className="w-10 h-10 rounded-full border border-dark-border flex-shrink-0"
-              />
-            ) : (
-              <div className="w-10 h-10 rounded-full bg-neon-cyan/10 border border-neon-cyan/20 flex items-center justify-center flex-shrink-0">
-                <User className="w-5 h-5 text-neon-cyan" />
-              </div>
-            )}
-            <div className="flex-1 flex gap-2">
+            {/* Comment Input */}
+            <form onSubmit={handleAddComment} className="flex gap-2 flex-shrink-0">
               <input
                 type="text"
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
-                placeholder="Share your thoughts..."
-                className="flex-1 px-4 py-2.5 bg-dark-surface border border-dark-border rounded-xl text-sm text-white placeholder-gray-600 focus:outline-none focus:border-neon-magenta/30 transition-colors"
+                placeholder="Write a comment..."
+                className="flex-1 px-4 py-2.5 bg-white/[0.03] border border-white/10 rounded-xl text-sm text-white placeholder-gray-700 focus:outline-none focus:border-neon-magenta/30 transition-colors"
               />
               <button
                 type="submit"
                 disabled={!newComment.trim() || isSubmittingComment}
-                className="px-4 py-2.5 bg-neon-magenta/10 border border-neon-magenta/30 text-neon-magenta rounded-xl hover:bg-neon-magenta/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                className="px-4 py-2.5 bg-neon-magenta/10 border border-neon-magenta/25 text-neon-magenta rounded-xl hover:bg-neon-magenta/20 transition-colors disabled:opacity-30"
               >
                 {isSubmittingComment ? (
                   <div className="w-4 h-4 border border-current border-t-transparent rounded-full animate-spin" />
@@ -282,62 +345,7 @@ export default function PollCard({ poll }: PollCardProps) {
                   <Send className="w-4 h-4" />
                 )}
               </button>
-            </div>
-          </form>
-
-          {/* Comments List */}
-          <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
-            {loadingComments ? (
-              <div className="flex justify-center py-6">
-                <div className="w-6 h-6 border-2 border-neon-magenta border-t-transparent rounded-full animate-spin" />
-              </div>
-            ) : comments.length === 0 ? (
-              <div className="text-center py-8">
-                <MessageCircle className="w-10 h-10 text-gray-800 mx-auto mb-2" />
-                <p className="text-sm text-gray-600">
-                  No comments yet. Start the conversation!
-                </p>
-              </div>
-            ) : (
-              comments.map((comment) => (
-                <div
-                  key={comment.id}
-                  className="flex gap-3 p-3 rounded-xl bg-white/[0.02] border border-white/5 hover:border-white/10 transition-colors"
-                >
-                  {comment.userPhotoURL ? (
-                    <img
-                      src={comment.userPhotoURL}
-                      alt=""
-                      className="w-9 h-9 rounded-full border border-dark-border flex-shrink-0"
-                    />
-                  ) : (
-                    <div className="w-9 h-9 rounded-full bg-neon-magenta/10 border border-neon-magenta/20 flex items-center justify-center flex-shrink-0">
-                      <span className="text-xs font-bold text-neon-magenta">
-                        {comment.userName.charAt(0).toUpperCase()}
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-sm font-semibold text-gray-200">
-                        {comment.userName}
-                      </span>
-                      <span className="text-[10px] text-gray-600">
-                        {comment.createdAt?.toDate
-                          ? comment.createdAt.toDate().toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                            })
-                          : "Just now"}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-400 leading-relaxed">
-                      {comment.text}
-                    </p>
-                  </div>
-                </div>
-              ))
-            )}
+            </form>
           </div>
         </div>
       </div>
