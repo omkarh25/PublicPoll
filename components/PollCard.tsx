@@ -1,307 +1,346 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-
-/**
- * Poll Card Component
- * Displays daily poll question with voting, commenting, and sharing
- */
-
-interface PollOption {
-  index: number;
-  text: string;
-  percentage: number;
-  count: number;
-}
-
-interface PollData {
-  id: number;
-  question_text: string;
-  options: string[];
-  category: string;
-}
+import { useState, useEffect } from "react";
+import {
+  submitVote,
+  getUserVote,
+  getComments,
+  addComment,
+  subscribeToVoteCounts,
+  type Poll,
+  type Comment,
+} from "@/lib/firestore";
+import { useAuth } from "@/components/AuthProvider";
+import { Send, MessageCircle, User } from "lucide-react";
 
 interface PollCardProps {
-  poll: PollData;
-  userId: number;
-  initialUserVote?: number;
-  initialVoteCounts?: { option_index: number; count: number }[];
+  poll: Poll;
 }
 
-export default function PollCard({ poll, userId, initialUserVote, initialVoteCounts = [] }: PollCardProps) {
-  const [selectedOption, setSelectedOption] = useState<number | null>(initialUserVote ?? null);
-  const [hasVoted, setHasVoted] = useState(!!initialUserVote);
-  const [voteCounts, setVoteCounts] = useState<{ [key: number]: number }>({});
+export default function PollCard({ poll }: PollCardProps) {
+  const { user } = useAuth();
+  const [hasVoted, setHasVoted] = useState(false);
+  const [selectedOption, setSelectedOption] = useState<number | null>(null);
+  const [voteCounts, setVoteCounts] = useState<Map<number, number>>(new Map());
   const [totalVotes, setTotalVotes] = useState(0);
-  const [showComments, setShowComments] = useState(false);
-  const [comments, setComments] = useState<any[]>([]);
-  const [newComment, setNewComment] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showShareTooltip, setShowShareTooltip] = useState(false);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [newComment, setNewComment] = useState("");
+  const [isSubmittingVote, setIsSubmittingVote] = useState(false);
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [loadingComments, setLoadingComments] = useState(false);
 
-  // Initialize vote counts
+  // Check if user already voted
   useEffect(() => {
-    const counts: { [key: number]: number } = {};
-    let total = 0;
-    initialVoteCounts.forEach((vc) => {
-      counts[vc.option_index] = vc.count;
-      total += vc.count;
-    });
-    setVoteCounts(counts);
-    setTotalVotes(total);
-  }, [initialVoteCounts]);
-
-  // Load comments
-  useEffect(() => {
-    if (showComments) {
-      loadComments();
-    }
-  }, [showComments]);
-
-  const loadComments = async () => {
-    try {
-      const res = await fetch(`/api/comments?questionId=${poll.id}`);
-      const data = await res.json();
-      setComments(data);
-    } catch (error) {
-      console.error('Failed to load comments:', error);
-    }
-  };
-
-  // Handle voting
-  const handleVote = async (optionIndex: number) => {
-    if (hasVoted || isSubmitting) return;
-
-    setIsSubmitting(true);
-    try {
-      const res = await fetch('/api/vote', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          questionId: poll.id,
-          optionIndex,
-        }),
-      });
-
-      if (res.ok) {
-        setSelectedOption(optionIndex);
+    if (!user || !poll) return;
+    getUserVote(poll.id, user.uid).then((vote) => {
+      if (vote) {
         setHasVoted(true);
-        
-        // Update local vote counts
-        setVoteCounts((prev) => ({
-          ...prev,
-          [optionIndex]: (prev[optionIndex] || 0) + 1,
-        }));
-        setTotalVotes((prev) => prev + 1);
-        
-        console.log(`[Poll] Vote submitted for option ${optionIndex}`);
+        setSelectedOption(vote.optionIndex);
       }
-    } catch (error) {
-      console.error('Failed to submit vote:', error);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+    });
+  }, [user, poll]);
 
-  // Handle comment submission
-  const handleSubmitComment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newComment.trim() || isSubmitting) return;
+  // Subscribe to real-time vote counts
+  useEffect(() => {
+    if (!poll) return;
+    const unsub = subscribeToVoteCounts(poll.id, (counts, total) => {
+      setVoteCounts(counts);
+      setTotalVotes(total);
+    });
+    return () => unsub();
+  }, [poll]);
 
-    setIsSubmitting(true);
+  // Load comments (always visible)
+  useEffect(() => {
+    if (!poll) return;
+    setLoadingComments(true);
+    getComments(poll.id)
+      .then(setComments)
+      .catch(console.error)
+      .finally(() => setLoadingComments(false));
+  }, [poll]);
+
+  const handleVote = async (optionIndex: number) => {
+    if (!user || hasVoted || isSubmittingVote) return;
+    setIsSubmittingVote(true);
     try {
-      const res = await fetch('/api/comments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          questionId: poll.id,
-          commentText: newComment,
-        }),
-      });
-
-      if (res.ok) {
-        setNewComment('');
-        loadComments();
-      }
-    } catch (error) {
-      console.error('Failed to submit comment:', error);
+      await submitVote(poll.id, user.uid, optionIndex);
+      setSelectedOption(optionIndex);
+      setHasVoted(true);
+    } catch (err) {
+      console.error("Vote failed:", err);
     } finally {
-      setIsSubmitting(false);
+      setIsSubmittingVote(false);
     }
   };
 
-  // Handle share
-  const handleShare = async () => {
-    const shareData = {
-      title: 'PublicPoll - Karnataka',
-      text: poll.question_text,
-      url: window.location.origin,
-    };
-
-    if (navigator.share) {
-      try {
-        await navigator.share(shareData);
-      } catch (err) {
-        // User cancelled or error
-      }
-    } else {
-      // Fallback: copy to clipboard
-      await navigator.clipboard.writeText(`${poll.question_text}\n\nVote at: ${window.location.origin}`);
-      setShowShareTooltip(true);
-      setTimeout(() => setShowShareTooltip(false), 2000);
+  const handleAddComment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !newComment.trim() || isSubmittingComment) return;
+    setIsSubmittingComment(true);
+    try {
+      await addComment(poll.id, {
+        uid: user.uid,
+        userName: user.displayName || "Anonymous",
+        userPhotoURL: user.photoURL || "",
+        text: newComment.trim(),
+      });
+      setNewComment("");
+      const updated = await getComments(poll.id);
+      setComments(updated);
+    } catch (err) {
+      console.error("Comment failed:", err);
+    } finally {
+      setIsSubmittingComment(false);
     }
   };
 
-  // Calculate percentage
-  const getPercentage = (optionIndex: number) => {
+  const getPercentage = (index: number) => {
     if (totalVotes === 0) return 0;
-    return Math.round(((voteCounts[optionIndex] || 0) / totalVotes) * 100);
+    const count = voteCounts.get(index) || 0;
+    return Math.round((count / totalVotes) * 100);
   };
 
-  // Get category color
-  const getCategoryColor = (category: string) => {
-    const colors: { [key: string]: string } = {
-      traffic: 'bg-orange-100 text-orange-700',
-      infrastructure: 'bg-blue-100 text-blue-700',
-      law_enforcement: 'bg-red-100 text-red-700',
-      sanitation: 'bg-green-100 text-green-700',
-      governance: 'bg-purple-100 text-purple-700',
-      transport: 'bg-yellow-100 text-yellow-700',
-      environment: 'bg-emerald-100 text-emerald-700',
-      healthcare: 'bg-pink-100 text-pink-700',
-      safety: 'bg-cyan-100 text-cyan-700',
-      default: 'bg-gray-100 text-gray-700',
-    };
-    return colors[category] || colors.default;
-  };
+  const winningIndex =
+    totalVotes > 0
+      ? poll.options.reduce((best, _, i) => {
+          const bestCount = voteCounts.get(best) || 0;
+          const currCount = voteCounts.get(i) || 0;
+          return currCount > bestCount ? i : best;
+        }, 0)
+      : -1;
 
   return (
-    <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
-      {/* Header */}
-      <div className="p-6 border-b border-gray-100">
-        <div className="flex items-center justify-between mb-3">
-          <span className={`px-3 py-1 text-xs font-medium rounded-full ${getCategoryColor(poll.category)}`}>
-            {poll.category.replace('_', ' ').toUpperCase()}
-          </span>
-          <span className="text-sm text-gray-500">📊 Daily Poll</span>
+    <div className="w-full max-w-2xl mx-auto space-y-6">
+      {/* Poll Card */}
+      <div
+        className={`relative rounded-2xl overflow-hidden transition-all duration-500 ${
+          hasVoted ? "shadow-[0_0_40px_rgba(0,255,255,0.08)]" : "shadow-[0_0_40px_rgba(0,255,255,0.04)]"
+        }`}
+      >
+        {/* Animated gradient border */}
+        <div className="absolute inset-0 rounded-2xl p-[1.5px] bg-gradient-to-br from-neon-cyan/40 via-neon-magenta/30 to-neon-lime/20 pointer-events-none" />
+
+        <div className="relative bg-[#0f0f0f] rounded-2xl">
+          {/* Top bar with category and vote count */}
+          <div className="flex items-center justify-between px-6 pt-6 pb-2">
+            <span className="px-3 py-1 text-xs font-semibold tracking-wider uppercase rounded-full bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20">
+              {poll.category}
+            </span>
+            <span className="text-sm text-gray-500 font-medium">
+              {totalVotes.toLocaleString()} vote{totalVotes !== 1 ? "s" : ""}
+            </span>
+          </div>
+
+          {/* Question */}
+          <div className="px-6 py-5">
+            <h2 className="text-2xl md:text-3xl font-bold text-white leading-snug">
+              {poll.question}
+            </h2>
+          </div>
+
+          {/* Options OR Results */}
+          <div className="px-6 pb-6 space-y-3">
+            {poll.options.map((option, index) => {
+              const pct = getPercentage(index);
+              const isSelected = selectedOption === index;
+              const isWinner = winningIndex === index && totalVotes > 0;
+
+              return (
+                <div key={index} className="relative">
+                  {/* Progress bar background (shown after voting) */}
+                  {hasVoted && (
+                    <div
+                      className="absolute inset-0 rounded-xl overflow-hidden"
+                      style={{ zIndex: 0 }}
+                    >
+                      <div
+                        className={`h-full rounded-xl transition-all duration-700 ease-out ${
+                          isSelected
+                            ? "bg-gradient-to-r from-neon-cyan/15 to-neon-lime/10"
+                            : "bg-white/[0.03]"
+                        }`}
+                        style={{ width: `${Math.max(pct, 5)}%` }}
+                      />
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => handleVote(index)}
+                    disabled={hasVoted || isSubmittingVote}
+                    className={`relative w-full flex items-center gap-4 px-5 py-4 rounded-xl border-2 text-left font-medium transition-all duration-300 ${
+                      hasVoted
+                        ? isSelected
+                          ? "border-neon-cyan/40 text-white cursor-default"
+                          : "border-white/5 text-gray-400 cursor-default"
+                        : "border-white/10 text-gray-200 hover:border-neon-cyan/40 hover:bg-neon-cyan/5 hover:text-white cursor-pointer hover:shadow-[0_0_20px_rgba(0,255,255,0.06)]"
+                    }`}
+                    style={{ zIndex: 1 }}
+                  >
+                    {/* Option letter */}
+                    <span
+                      className={`flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold transition-colors ${
+                        hasVoted
+                          ? isSelected
+                            ? "bg-neon-cyan text-black"
+                            : "bg-white/5 text-gray-500"
+                          : "bg-white/5 text-gray-400 group-hover:bg-neon-cyan/20"
+                      }`}
+                    >
+                      {String.fromCharCode(65 + index)}
+                    </span>
+
+                    {/* Option text */}
+                    <span className="flex-1 text-base md:text-lg">{option}</span>
+
+                    {/* Percentage (shown after voting) */}
+                    {hasVoted && (
+                      <div className="flex items-center gap-2">
+                        {isWinner && (
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-neon-lime">
+                            Leading
+                          </span>
+                        )}
+                        <span
+                          className={`text-lg font-bold ${
+                            isSelected ? "text-neon-cyan" : "text-gray-500"
+                          }`}
+                        >
+                          {pct}%
+                        </span>
+                      </div>
+                    )}
+                  </button>
+
+                  {/* Vote count text below bar */}
+                  {hasVoted && (
+                    <p className="text-xs text-gray-600 mt-1 ml-14">
+                      {voteCounts.get(index) || 0} vote
+                      {(voteCounts.get(index) || 0) !== 1 ? "s" : ""}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Vote confirmation */}
+            {hasVoted && selectedOption !== null && (
+              <div className="mt-4 p-4 rounded-xl bg-neon-cyan/5 border border-neon-cyan/15">
+                <p className="text-sm text-neon-cyan font-medium">
+                  You voted: {poll.options[selectedOption]}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
-        <h2 className="text-xl font-semibold text-gray-800">{poll.question_text}</h2>
-        <p className="text-sm text-gray-500 mt-2">{totalVotes} votes • {comments.length} comments</p>
       </div>
 
-      {/* Options */}
-      <div className="p-6 space-y-3">
-        {poll.options.map((option, index) => (
-          <button
-            key={index}
-            onClick={() => handleVote(index)}
-            disabled={hasVoted}
-            className={`w-full relative flex items-center justify-between p-4 rounded-xl border-2 transition-all ${
-              hasVoted
-                ? selectedOption === index
-                  ? 'border-primary-500 bg-primary-50'
-                  : 'border-gray-200 bg-gray-50'
-                : 'border-gray-200 hover:border-primary-400 hover:bg-primary-50 cursor-pointer'
-            } ${hasVoted ? 'cursor-default' : ''}`}
-          >
-            {/* Option text */}
-            <span className={`font-medium ${selectedOption === index ? 'text-primary-700' : 'text-gray-700'}`}>
-              {option}
+      {/* Comments Section — Always visible below */}
+      <div className="relative rounded-2xl overflow-hidden">
+        <div className="absolute inset-0 rounded-2xl p-[1px] bg-gradient-to-br from-white/10 via-white/5 to-transparent pointer-events-none" />
+        <div className="relative bg-[#0f0f0f] rounded-2xl p-6">
+          {/* Header */}
+          <div className="flex items-center gap-2 mb-5">
+            <MessageCircle className="w-5 h-5 text-neon-magenta" />
+            <h3 className="text-lg font-bold text-white">
+              Comments
+            </h3>
+            <span className="text-sm text-gray-500">
+              ({comments.length})
             </span>
+          </div>
 
-            {/* Percentage (shown after voting) */}
-            {hasVoted && (
-              <span className="text-sm font-semibold text-gray-600">
-                {getPercentage(index)}%
-              </span>
-            )}
-
-            {/* Progress bar background */}
-            {hasVoted && (
-              <div 
-                className="absolute bottom-0 left-0 h-1 bg-primary-500 transition-all duration-500 rounded-full"
-                style={{ width: `${getPercentage(index)}%` }}
-              />
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Actions */}
-      <div className="px-6 pb-4 flex gap-3">
-        <button
-          onClick={() => setShowComments(!showComments)}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-600 hover:text-primary-600 hover:bg-gray-100 rounded-lg transition-colors"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-          </svg>
-          Comment
-        </button>
-        
-        <button
-          onClick={handleShare}
-          className="relative flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-600 hover:text-primary-600 hover:bg-gray-100 rounded-lg transition-colors"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-          </svg>
-          Share
-          {showShareTooltip && (
-            <span className="absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 text-xs bg-gray-800 text-white rounded whitespace-nowrap">
-              Copied to clipboard!
-            </span>
-          )}
-        </button>
-      </div>
-
-      {/* Comments Section */}
-      {showComments && (
-        <div className="border-t border-gray-100 bg-gray-50 p-6">
-          <h3 className="font-semibold text-gray-800 mb-4">Comments ({comments.length})</h3>
-          
           {/* Comment Form */}
-          <form onSubmit={handleSubmitComment} className="mb-4">
-            <div className="flex gap-2">
+          <form onSubmit={handleAddComment} className="flex gap-3 mb-6">
+            {user?.photoURL ? (
+              <img
+                src={user.photoURL}
+                alt=""
+                className="w-10 h-10 rounded-full border border-dark-border flex-shrink-0"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-neon-cyan/10 border border-neon-cyan/20 flex items-center justify-center flex-shrink-0">
+                <User className="w-5 h-5 text-neon-cyan" />
+              </div>
+            )}
+            <div className="flex-1 flex gap-2">
               <input
                 type="text"
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
-                placeholder="Add a comment..."
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none text-sm"
+                placeholder="Share your thoughts..."
+                className="flex-1 px-4 py-2.5 bg-dark-surface border border-dark-border rounded-xl text-sm text-white placeholder-gray-600 focus:outline-none focus:border-neon-magenta/30 transition-colors"
               />
               <button
                 type="submit"
-                disabled={!newComment.trim() || isSubmitting}
-                className="px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!newComment.trim() || isSubmittingComment}
+                className="px-4 py-2.5 bg-neon-magenta/10 border border-neon-magenta/30 text-neon-magenta rounded-xl hover:bg-neon-magenta/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
-                Post
+                {isSubmittingComment ? (
+                  <div className="w-4 h-4 border border-current border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
               </button>
             </div>
           </form>
 
           {/* Comments List */}
-          <div className="space-y-3 max-h-64 overflow-y-auto">
-            {comments.length === 0 ? (
-              <p className="text-sm text-gray-500 text-center py-4">No comments yet. Be the first to comment!</p>
+          <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
+            {loadingComments ? (
+              <div className="flex justify-center py-6">
+                <div className="w-6 h-6 border-2 border-neon-magenta border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : comments.length === 0 ? (
+              <div className="text-center py-8">
+                <MessageCircle className="w-10 h-10 text-gray-800 mx-auto mb-2" />
+                <p className="text-sm text-gray-600">
+                  No comments yet. Start the conversation!
+                </p>
+              </div>
             ) : (
               comments.map((comment) => (
-                <div key={comment.id} className="bg-white p-3 rounded-lg border border-gray-200">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-medium text-gray-600">
-                      {comment.aadhaar_number.slice(0, 4)}****{comment.aadhaar_number.slice(-4)}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {new Date(comment.created_at).toLocaleDateString()}
-                    </span>
+                <div
+                  key={comment.id}
+                  className="flex gap-3 p-3 rounded-xl bg-white/[0.02] border border-white/5 hover:border-white/10 transition-colors"
+                >
+                  {comment.userPhotoURL ? (
+                    <img
+                      src={comment.userPhotoURL}
+                      alt=""
+                      className="w-9 h-9 rounded-full border border-dark-border flex-shrink-0"
+                    />
+                  ) : (
+                    <div className="w-9 h-9 rounded-full bg-neon-magenta/10 border border-neon-magenta/20 flex items-center justify-center flex-shrink-0">
+                      <span className="text-xs font-bold text-neon-magenta">
+                        {comment.userName.charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="text-sm font-semibold text-gray-200">
+                        {comment.userName}
+                      </span>
+                      <span className="text-[10px] text-gray-600">
+                        {comment.createdAt?.toDate
+                          ? comment.createdAt.toDate().toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                            })
+                          : "Just now"}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-400 leading-relaxed">
+                      {comment.text}
+                    </p>
                   </div>
-                  <p className="text-sm text-gray-700">{comment.comment_text}</p>
                 </div>
               ))
             )}
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

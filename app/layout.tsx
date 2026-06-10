@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import AuthProvider from '@/components/AuthProvider';
 
 export const metadata: Metadata = {
-  title: 'PublicPoll - Citizen Voice',
-  description: 'Your voice matters. Participate in daily polls and shape your community.',
+  title: 'PublicPoll - Ask. Vote. Shape.',
+  description: 'Your voice matters. Participate in polls and shape your community.',
 };
 
 export default function RootLayout({
@@ -13,8 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-slate-50">
-        {children}
+      <body className="min-h-screen bg-dark-bg text-gray-100 antialiased">
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );
